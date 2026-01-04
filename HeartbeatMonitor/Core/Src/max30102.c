@@ -47,26 +47,18 @@ void MAX30102_Init(I2C_HandleTypeDef *hi2c) {
 void MAX30102_ReadFIFO(uint32_t *red_led, uint32_t *ir_led) {
     uint8_t data[6];
     
-    // Check write/read pointers to see if we have data?
-    // For simplicity, we just read one sample if called.
-    // In a real app, you might check interrupt or pointers.
+    // Note: We don't check FIFO pointers for simplicity.
+    // In production, check interrupt or pointers to avoid reading stale data.
     
     MAX30102_ReadRegs(REG_FIFO_DATA, data, 6);
 
     // Combine bytes
-    // Data is 3 bytes for Red, 3 bytes for IR
-    /*
-      FIFO Data Format:
-      [0] Red[17:16]
-      [1] Red[15:8]
-      [2] Red[7:0]
-      [3] IR[17:16]
-      [4] IR[15:8]
-      [5] IR[7:0]
-    */
-
-    *red_led = ((data[0] & 0x03) << 16) | (data[1] << 8) | data[2];
-    *ir_led  = ((data[3] & 0x03) << 16) | (data[4] << 8) | data[5];
+    // CORRECTED ORDER (matches eepj library and datasheet for SpO2 mode):
+    // Bytes [0-2]: IR LED (we use this for pulse detection!)
+    // Bytes [3-5]: RED LED
+    
+    *ir_led  = ((data[0] & 0x03) << 16) | (data[1] << 8) | data[2];
+    *red_led = ((data[3] & 0x03) << 16) | (data[4] << 8) | data[5];
 }
 
 float MAX30102_ReadTemperature() {

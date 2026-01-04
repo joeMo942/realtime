@@ -2,4 +2,4 @@
 ../Core/Src/max30102.c:10:13:MAX30102_ReadRegs	24	static
 ../Core/Src/max30102.c:15:6:MAX30102_Init	16	static
 ../Core/Src/max30102.c:47:6:MAX30102_ReadFIFO	24	static
-../Core/Src/max30102.c:72:7:MAX30102_ReadTemperature	16	static
+../Core/Src/max30102.c:64:7:MAX30102_ReadTemperature	16	static
