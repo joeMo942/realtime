@@ -112,7 +112,24 @@ int main(void)
   MX_GPIO_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
+  // I2C Scanner
+  printf("Scanning I2C bus...\r\n");
+  HAL_StatusTypeDef result;
+  uint8_t i;
+  for (i=1; i<128; i++) {
+      result = HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(i<<1), 2, 2);
+      if (result == HAL_OK) {
+          printf("I2C device found at address 0x%02X\r\n", i);
+      }
+  }
 
+  MAX30102_Init(&hi2c1);
+  lcd_init(&hi2c1);
+  lcd_clear();
+  lcd_put_cur(0, 0);
+  lcd_send_string("Heartbeat Init");
+  HAL_Delay(1000);
+  lcd_clear();
   /* USER CODE END 2 */
 
   /* Init scheduler */
