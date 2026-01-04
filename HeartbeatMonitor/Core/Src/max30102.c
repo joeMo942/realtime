@@ -35,8 +35,11 @@ void MAX30102_Init(I2C_HandleTypeDef *hi2c) {
     MAX30102_WriteReg(REG_SPO2_CONFIG, 0x27);
 
     // LED Pulse Amplitude
-    MAX30102_WriteReg(REG_LED1_PA, 0x24); // Red ~7mA
-    MAX30102_WriteReg(REG_LED2_PA, 0x24); // IR ~7mA
+    // Lowered to avoid saturation. 
+    // 0x1F = ~6.4mA. (Old was 0x24 = ~7.2mA). 
+    // If signal is still clipped, go lower (e.g. 0x10).
+    MAX30102_WriteReg(REG_LED1_PA, 0x1F); // Red
+    MAX30102_WriteReg(REG_LED2_PA, 0x1F); // IR
     MAX30102_WriteReg(REG_PILOT_PA, 0x7F);
 }
 

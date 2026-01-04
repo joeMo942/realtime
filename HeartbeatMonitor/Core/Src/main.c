@@ -45,7 +45,7 @@
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
 
-/* Definitions for HeartbeatTask */
+/* Definitions for HeartbeatTask (Legacy) */
 osThreadId_t HeartbeatTaskHandle;
 const osThreadAttr_t HeartbeatTask_attributes = {
   .name = "HeartbeatTask",
@@ -59,10 +59,45 @@ const osThreadAttr_t DisplayTask_attributes = {
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
+
+/* Definitions for AcquisitionTask */
+osThreadId_t AcquisitionTaskHandle;
+const osThreadAttr_t AcquisitionTask_attributes = {
+  .name = "AcquisitionTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal, // Higher priority to capture data
+};
+
+/* Definitions for ProcessingTask */
+osThreadId_t ProcessingTaskHandle;
+const osThreadAttr_t ProcessingTask_attributes = {
+  .name = "ProcessingTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal,
+};
+
+/* Definitions for Queue and Mutex */
+osMessageQueueId_t rawDataQueueHandle;
+const osMessageQueueAttr_t rawDataQueue_attributes = {
+  .name = "rawDataQueue"
+};
+
+osMutexId_t bpmMutexHandle;
+const osMutexAttr_t bpmMutex_attributes = {
+  .name = "bpmMutex"
+};
 /* USER CODE BEGIN PV */
 uint32_t ir_val = 0;
 uint32_t red_val = 0;
 float temp_val = 0.0f;
+float bpm = 0.0f;
+volatile uint32_t last_beat_time = 0;
+int finger_on_counter = 0;
+// Circular Buffer for Dynamic Thresholding
+#define BUFFER_SIZE 50
+uint32_t ir_buffer[BUFFER_SIZE];
+int buffer_idx = 0;
+uint32_t amplitude = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -71,6 +106,9 @@ static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
 void StartDefaultTask(void *argument);
 void StartTask02(void *argument);
+void StartAcquisitionTask(void *argument);
+void StartProcessingTask(void *argument);
+void StartDisplayTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -151,12 +189,20 @@ int main(void)
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
 
-  /* Create the thread(s) */
-  /* creation of HeartbeatTask */
-  HeartbeatTaskHandle = osThreadNew(StartDefaultTask, NULL, &HeartbeatTask_attributes);
+  /* Create the Queue */
+  rawDataQueueHandle = osMessageQueueNew(16, sizeof(uint32_t), &rawDataQueue_attributes);
 
-  /* creation of DisplayTask */
-  DisplayTaskHandle = osThreadNew(StartTask02, NULL, &DisplayTask_attributes);
+  /* Create the Mutex */
+  bpmMutexHandle = osMutexNew(&bpmMutex_attributes);
+
+  /* Create the thread(s) */
+  /* Step 2: Architecture - Separate Tasks */
+  AcquisitionTaskHandle = osThreadNew(StartAcquisitionTask, NULL, &AcquisitionTask_attributes);
+  ProcessingTaskHandle = osThreadNew(StartProcessingTask, NULL, &ProcessingTask_attributes);
+  DisplayTaskHandle = osThreadNew(StartDisplayTask, NULL, &DisplayTask_attributes);
+
+  /* Legacy Handles (Unused but kept to match generated code footprint if needed) */
+  HeartbeatTaskHandle = osThreadNew(StartDefaultTask, NULL, &HeartbeatTask_attributes); // Kept minimal
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -294,20 +340,113 @@ static void MX_GPIO_Init(void)
   * @retval None
   */
 /* USER CODE END Header_StartDefaultTask */
+void StartAcquisitionTask(void *argument)
+{
+  /* Step 1: Pulse Acquisition Task */
+  for(;;)
+  {
+    MAX30102_ReadFIFO(&red_val, &ir_val);
+    
+    // Add raw sample to Queue (Wait 0, drop if full to be real-time safe)
+    osMessageQueuePut(rawDataQueueHandle, &ir_val, 0, 0);
+
+    osDelay(20); // 50Hz Sampling
+  }
+}
+
+void StartProcessingTask(void *argument)
+{
+  /* Step 4: Core Algorithm Task */
+  uint32_t raw_ir;
+  
+  for(;;)
+  {
+    // Wait for new sample
+    if (osMessageQueueGet(rawDataQueueHandle, &raw_ir, NULL, 100) == osOK) {
+        
+        // --- 1. Signal Processing ---
+        // 1. Add to Circular Buffer
+        ir_buffer[buffer_idx] = raw_ir;
+        buffer_idx = (buffer_idx + 1) % BUFFER_SIZE;
+    
+        // 2. Dynamic Threshold
+        uint32_t min_val = 0xFFFFFFFF;
+        uint32_t max_val = 0;
+        for(int i=0; i<BUFFER_SIZE; i++) {
+            if(ir_buffer[i] < min_val) min_val = ir_buffer[i];
+            if(ir_buffer[i] > max_val) max_val = ir_buffer[i];
+        }
+        
+        // AC Amplitude (Min/Max Difference)
+        amplitude = max_val - min_val;
+        uint32_t threshold = min_val + (amplitude * 8 / 10); // Strict 80% Threshold
+
+        // 3. Finger Detection
+        if (raw_ir > 10000 && amplitude > 500) { // Ultra-Strict: Strong pulse only
+            finger_on_counter = 50; 
+        } else {
+            if(finger_on_counter > 0) finger_on_counter--;
+        }
+    
+        float computed_bpm = 0.0f;
+
+        if (finger_on_counter > 0) { 
+            static uint8_t is_above = 0;
+            uint32_t hyst = amplitude / 20; 
+            
+            if (raw_ir > threshold + hyst) { 
+                // Lockout 650ms -> Max ~92 BPM. 
+                // Ultra-Strict Resting Mode.
+                if (is_above == 0 && (HAL_GetTick() - last_beat_time > 650)) { 
+                    is_above = 1;
+                    
+                    uint32_t delta = HAL_GetTick() - last_beat_time;
+                    float instant_bpm = 60000.0f / delta;
+                    
+                    // Strict Range: 40 to 95 BPM. 
+                    if (instant_bpm > 40 && instant_bpm <= 95) {
+                         computed_bpm = instant_bpm;
+                    }
+                    last_beat_time = HAL_GetTick();
+                }
+            } else if (raw_ir < threshold - hyst) {
+                is_above = 0;
+            }
+        }
+        
+        // --- 4. Shared Data Update (Mutex) ---
+        osMutexAcquire(bpmMutexHandle, osWaitForever);
+        if (finger_on_counter > 0 && computed_bpm > 0) {
+             if (bpm < 10.0f) { 
+                bpm = computed_bpm; 
+            } else {
+                // Slower smoothing: 95% old, 5% new
+                bpm = (bpm * 0.95f) + (computed_bpm * 0.05f); 
+            }
+            
+            /* Step 5: Alerts (Check Thresholds) */
+            if (bpm > 100.0f) {
+                HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); // Alert Logic
+            } else {
+                HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+                HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5); // Normal Heartbeat Blink
+            }
+
+        } else if (finger_on_counter == 0) {
+             bpm = 0.0f;
+             HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+        }
+        osMutexRelease(bpmMutexHandle);
+        
+    } // End Queue Get
+  }
+}
+
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
   /* Infinite loop */
-  for(;;)
-  {
-    MAX30102_ReadFIFO(&red_val, &ir_val);
-    temp_val = MAX30102_ReadTemperature();
-    // Simple verification check via LED toggle if reading
-    if(ir_val > 10000) {
-        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5); // Toggle LD2 if valid signal
-    }
-    osDelay(10); // 100Hz = 10ms sampling roughly (sensor has its own fifo, but we poll)
-  }
+  for(;;) { osDelay(1000); }
   /* USER CODE END 5 */
 }
 
@@ -318,25 +457,59 @@ void StartDefaultTask(void *argument)
 * @retval None
 */
 /* USER CODE END Header_StartTask02 */
-void StartTask02(void *argument)
+/* USER CODE END Header_StartTask02 */
+void StartDisplayTask(void *argument)
 {
-  /* USER CODE BEGIN StartTask02 */
-  char buf[16];
+  /* Step : Display Update Task */
+  char buf[32]; 
   /* Infinite loop */
   for(;;)
   {
+    // Securely read BPM first to use for both rows
+    float display_bpm = 0.0f;
+    osMutexAcquire(bpmMutexHandle, osWaitForever);
+    display_bpm = bpm;
+    osMutexRelease(bpmMutexHandle);
+
+    uint32_t bpm_int = (uint32_t)display_bpm;
+    if (bpm_int > 250) bpm_int = 0;
+
+    // --- Top Row: Status ---
     lcd_put_cur(0, 0);
-    sprintf(buf, "IR: %lu", ir_val);
+    if (finger_on_counter > 0) {
+        if (bpm_int > 100) {
+            snprintf(buf, 32, "Status: High    ");
+        } else if (bpm_int < 60 && bpm_int > 10) { // >10 to avoid "Low" when just starting
+            snprintf(buf, 32, "Status: Low     ");
+        } else if (bpm_int <= 10) {
+             snprintf(buf, 32, "Status: Calc... "); // Initializing
+        } else {
+             snprintf(buf, 32, "Status: Normal  ");
+        }
+    } else {
+         snprintf(buf, 32, "Status: Idle    ");
+    }
     lcd_send_string(buf);
     
+    // --- Bottom Row: BPM Value ---
     lcd_put_cur(1, 0);
-    sprintf(buf, "Temp: %.2f", temp_val);
+
+    if (finger_on_counter > 0) {
+        if (amplitude < 300) {
+             snprintf(buf, 32, "Weak Signal...  ");
+        } else {
+             snprintf(buf, 32, "BPM: %lu        ", bpm_int);
+        }
+    } else {
+        snprintf(buf, 32, "No Finger       "); 
+    }
     lcd_send_string(buf);
     
-    osDelay(500); // Update display every 500ms
+    osDelay(200); // 5Hz Update
   }
-  /* USER CODE END StartTask02 */
 }
+
+void StartTask02(void *argument) { StartDisplayTask(argument); } // Redirect if RTOS calls old name
 
 /**
   * @brief  Period elapsed callback in non blocking mode
@@ -374,7 +547,8 @@ void Error_Handler(void)
   }
   /* USER CODE END Error_Handler_Debug */
 }
-#ifdef USE_FULL_ASSERT
+
+#ifdef  USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
   *         where the assert_param error has occurred.

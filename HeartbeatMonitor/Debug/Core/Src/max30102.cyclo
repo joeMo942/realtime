@@ -1,5 +1,5 @@
 ../Core/Src/max30102.c:5:13:MAX30102_WriteReg	1
 ../Core/Src/max30102.c:10:13:MAX30102_ReadRegs	1
 ../Core/Src/max30102.c:15:6:MAX30102_Init	1
-../Core/Src/max30102.c:43:6:MAX30102_ReadFIFO	1
-../Core/Src/max30102.c:68:7:MAX30102_ReadTemperature	1
+../Core/Src/max30102.c:46:6:MAX30102_ReadFIFO	1
+../Core/Src/max30102.c:71:7:MAX30102_ReadTemperature	1
