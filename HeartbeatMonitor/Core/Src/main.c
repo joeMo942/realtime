@@ -15,7 +15,7 @@
   *
   ******************************************************************************
   */
-/* USER CODE END Header */
+/* USER CODE END Header *///yiusef
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "cmsis_os.h"
@@ -350,7 +350,8 @@ void StartAcquisitionTask(void *argument)
     // Add raw sample to Queue (Wait 0, drop if full to be real-time safe)
     osMessageQueuePut(rawDataQueueHandle, &ir_val, 0, 0);
 
-    osDelay(20); // 50Hz Sampling
+    // With 8x hardware averaging at 100Hz, effective output is ~12.5 samples/sec
+    osDelay(80); // 12.5Hz Sampling to match sensor
   }
 }
 
@@ -379,32 +380,51 @@ void StartProcessingTask(void *argument)
         
         // AC Amplitude (Min/Max Difference)
         amplitude = max_val - min_val;
-        uint32_t threshold = min_val + (amplitude * 8 / 10); // Strict 80% Threshold
+        // 85% Threshold - Only catches main systolic peak
+        uint32_t threshold = min_val + (amplitude * 85 / 100);
 
         // 3. Finger Detection
-        if (raw_ir > 10000 && amplitude > 500) { // Ultra-Strict: Strong pulse only
+        if (raw_ir > 10000 && amplitude > 400) {
             finger_on_counter = 50; 
         } else {
             if(finger_on_counter > 0) finger_on_counter--;
         }
     
         float computed_bpm = 0.0f;
+        
+        // Adaptive Lockout Period
+        // HIGHER initial lockout (700ms = max 85 BPM for first reading)
+        // Then adapts based on 65% of previous interval
+        static uint32_t adaptive_lockout = 700;
 
         if (finger_on_counter > 0) { 
             static uint8_t is_above = 0;
-            uint32_t hyst = amplitude / 20; 
+            uint32_t hyst = amplitude / 15;
             
             if (raw_ir > threshold + hyst) { 
-                // Lockout 650ms -> Max ~92 BPM. 
-                // Ultra-Strict Resting Mode.
-                if (is_above == 0 && (HAL_GetTick() - last_beat_time > 650)) { 
+                if (is_above == 0 && (HAL_GetTick() - last_beat_time > adaptive_lockout)) { 
                     is_above = 1;
                     
                     uint32_t delta = HAL_GetTick() - last_beat_time;
+                    
+                    // Update adaptive lockout (65% of interval)
+                    // Min 350ms (max 170 BPM), Max 1000ms
+                    uint32_t new_lockout = (delta * 65) / 100;
+                    if (new_lockout < 350) new_lockout = 350;
+                    if (new_lockout > 1000) new_lockout = 1000;
+                    adaptive_lockout = new_lockout;
+                    
                     float instant_bpm = 60000.0f / delta;
                     
-                    // Strict Range: 40 to 95 BPM. 
-                    if (instant_bpm > 40 && instant_bpm <= 95) {
+                    // Sanity Check: Reject readings that are >1.5x or <0.6x current BPM
+                    // This catches double-count spikes (e.g., 70 -> 140 rejected)
+                    if (bpm > 10.0f) {
+                        if (instant_bpm > bpm * 1.5f || instant_bpm < bpm * 0.6f) {
+                            instant_bpm = 0; // Reject this reading
+                        }
+                    }
+                    
+                    if (instant_bpm > 40 && instant_bpm <= 180) {
                          computed_bpm = instant_bpm;
                     }
                     last_beat_time = HAL_GetTick();
@@ -412,6 +432,8 @@ void StartProcessingTask(void *argument)
             } else if (raw_ir < threshold - hyst) {
                 is_above = 0;
             }
+        } else {
+            adaptive_lockout = 700; // Reset to safe value
         }
         
         // --- 4. Shared Data Update (Mutex) ---
@@ -420,16 +442,14 @@ void StartProcessingTask(void *argument)
              if (bpm < 10.0f) { 
                 bpm = computed_bpm; 
             } else {
-                // Slower smoothing: 95% old, 5% new
-                bpm = (bpm * 0.95f) + (computed_bpm * 0.05f); 
+                bpm = (bpm * 0.8f) + (computed_bpm * 0.2f); 
             }
             
-            /* Step 5: Alerts (Check Thresholds) */
             if (bpm > 100.0f) {
-                HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); // Alert Logic
+                HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
             } else {
                 HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
-                HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5); // Normal Heartbeat Blink
+                HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
             }
 
         } else if (finger_on_counter == 0) {

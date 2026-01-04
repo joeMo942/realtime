@@ -3,9 +3,9 @@
 ../Core/Src/main.c:282:13:MX_I2C1_Init	2
 ../Core/Src/main.c:316:13:MX_GPIO_Init	1
 ../Core/Src/main.c:343:6:StartAcquisitionTask	1
-../Core/Src/main.c:357:6:StartProcessingTask	20
-../Core/Src/main.c:445:6:StartDefaultTask	1
-../Core/Src/main.c:461:6:StartDisplayTask	9
-../Core/Src/main.c:512:6:StartTask02	1
-../Core/Src/main.c:522:6:HAL_TIM_PeriodElapsedCallback	2
-../Core/Src/main.c:540:6:Error_Handler	1
+../Core/Src/main.c:358:6:StartProcessingTask	25
+../Core/Src/main.c:465:6:StartDefaultTask	1
+../Core/Src/main.c:481:6:StartDisplayTask	9
+../Core/Src/main.c:532:6:StartTask02	1
+../Core/Src/main.c:542:6:HAL_TIM_PeriodElapsedCallback	2
+../Core/Src/main.c:560:6:Error_Handler	1

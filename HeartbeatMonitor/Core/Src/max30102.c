@@ -24,22 +24,23 @@ void MAX30102_Init(I2C_HandleTypeDef *hi2c) {
     MAX30102_WriteReg(REG_INTR_ENABLE_2, 0x00);
 
     // FIFO Config
-    // SMP_AVE = 010 (4 samples avg), FIRO_ROLLOVER_EN = 1, FIFO_A_FULL = 15
-    MAX30102_WriteReg(REG_FIFO_CONFIG, 0x4F);
+    // SMP_AVE = 011 (8 samples averaged in hardware) - KEY IMPROVEMENT from eepj library
+    // FIFO_ROLLOVER_EN = 1, FIFO_A_FULL = 15
+    // This reduces noise significantly!
+    MAX30102_WriteReg(REG_FIFO_CONFIG, 0x6F);
 
     // Mode Config (SpO2 mode)
     MAX30102_WriteReg(REG_MODE_CONFIG, 0x03);
 
     // SpO2 Config
     // ADC Range = 4096nA, Sample Rate = 100Hz, LED Pulse Width = 411us
+    // With 8x averaging, effective output = 12.5 samples/sec (smooth!)
     MAX30102_WriteReg(REG_SPO2_CONFIG, 0x27);
 
     // LED Pulse Amplitude
-    // Lowered to avoid saturation. 
-    // 0x1F = ~6.4mA. (Old was 0x24 = ~7.2mA). 
-    // If signal is still clipped, go lower (e.g. 0x10).
-    MAX30102_WriteReg(REG_LED1_PA, 0x1F); // Red
-    MAX30102_WriteReg(REG_LED2_PA, 0x1F); // IR
+    // Slightly higher for better SNR: 0x24 = ~7.2mA
+    MAX30102_WriteReg(REG_LED1_PA, 0x24); // Red
+    MAX30102_WriteReg(REG_LED2_PA, 0x24); // IR
     MAX30102_WriteReg(REG_PILOT_PA, 0x7F);
 }
 
